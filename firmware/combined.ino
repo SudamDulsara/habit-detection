@@ -5,6 +5,7 @@
 #define DHTPIN   4
 #define DHTTYPE  DHT22
 #define PIRPIN   13
+#define ACSPIN   34
 
 const char* WIFI_SSID   = "WiFiName";
 const char* WIFI_PASS   = "WiFiPassword";
@@ -13,6 +14,7 @@ const char* SERVER_PORT = "3000";
 
 String DHT_URL;
 String PIR_URL;
+String ACS_URL;
 
 //DHT22 STATE
 DHT dht(DHTPIN, DHTTYPE);
@@ -24,6 +26,12 @@ float lastGoodHum     = -1;
 int  lastReportedState  = -1;
 unsigned long lastMotionTime = 0;
 const unsigned long GRACE_PERIOD = 30000;
+
+//ACS712 STATE
+const int   ACS_SAMPLES  = 1000;
+const float MAINS_VOLTS  = 230.0;   // change to 120.0 if on US mains
+float       acsMidpoint  = 0;
+bool        lastFanOn    = false;
 
 //WIFI CONNECTION
 void connectWiFi() {
@@ -61,21 +69,38 @@ void setup() {
   Serial.begin(115200);
   dht.begin();
   pinMode(PIRPIN, INPUT);
+  analogSetAttenuation(ADC_11db);
+
+  // ACS712 calibration - must happen with fan OFF
+  Serial.println("=================================");
+  Serial.println("CALIBRATING ACS712... keep fan OFF");
+  Serial.println("=================================");
+  float total = 0;
+  for (int i = 0; i < 5000; i++) {
+    total += analogRead(ACSPIN);
+    delayMicroseconds(200);
+  }
+  acsMidpoint = (total / 5000.0) * (3.3 / 4095.0);
+  Serial.print("Calibrated midpoint: ");
+  Serial.print(acsMidpoint, 4);
+  Serial.println("V");
 
   connectWiFi();
 
   // Build endpoint URLs once
   DHT_URL = String("http://") + SERVER_IP + ":" + SERVER_PORT + "/api/dht22";
   PIR_URL = String("http://") + SERVER_IP + ":" + SERVER_PORT + "/api/pir";
+  ACS_URL = String("http://") + SERVER_IP + ":" + SERVER_PORT + "/api/acs712";
 
   Serial.println("All sensors working.");
-  Serial.println("   DHT22 → " + DHT_URL);
-  Serial.println("   PIR   → " + PIR_URL);
+  Serial.println("   DHT22  → " + DHT_URL);
+  Serial.println("   PIR    → " + PIR_URL);
+  Serial.println("   ACS712 → " + ACS_URL);
 }
 
 void loop() {
 
-  //PIR - every 5s
+  //PIR - every 500ms
   {
     static unsigned long lastCheck = 0;
     if (millis() - lastCheck >= 500) {
@@ -112,7 +137,7 @@ void loop() {
     }
   }
 
-  //DHT22 - every 15seconds
+  //DHT22 - every 15 seconds
   {
     static unsigned long lastDHT = 0;
     if (millis() - lastDHT >= 15000) {
@@ -158,6 +183,43 @@ void loop() {
                     ",\"humidity\":"       + String(humidity)    +
                     ",\"comfortStatus\":\"" + comfortStatus + "\"}";
       postData(DHT_URL, json);
+    }
+  }
+
+  //ACS712 - every 30 seconds
+  {
+    static unsigned long lastACS = 0;
+    if (millis() - lastACS >= 30000) {
+      lastACS = millis();
+
+      float sumSquares = 0;
+      for (int i = 0; i < ACS_SAMPLES; i++) {
+        float raw  = analogRead(ACSPIN) * (3.3 / 4095.0);
+        float diff = raw - acsMidpoint;
+        sumSquares += diff * diff;
+        delayMicroseconds(100);
+      }
+
+      float rmsVoltage = sqrt(sumSquares / ACS_SAMPLES);
+      float current    = rmsVoltage / 0.185;
+      if (current < 0.55) current = 0.00;    // noise filter
+      float wattage    = current * MAINS_VOLTS;
+      bool  fanOn      = current > 0.10;
+      String applianceState = fanOn ? "ON" : "OFF";
+
+      Serial.println("\n─── ACS712 ────────────────────────────");
+      Serial.println("  Current   : " + String(current, 3) + " A");
+      Serial.println("  Power     : " + String(wattage, 1) + " W");
+      Serial.println("  Fan       : " + applianceState);
+
+      String json = String("{\"voltage\":") + String(rmsVoltage, 4) +
+                    ",\"current\":" + String(current, 3) +
+                    ",\"wattage\":" + String(wattage, 1) +
+                    ",\"fanOn\":"   + (fanOn ? "true" : "false") +
+                    ",\"applianceState\":\"" + applianceState + "\"}";
+      postData(ACS_URL, json);
+
+      lastFanOn = fanOn;
     }
   }
 }
