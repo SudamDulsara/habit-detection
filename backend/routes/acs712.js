@@ -1,6 +1,6 @@
 const express = require('express');
 const router  = express.Router();
-const PowerReading = require('../model/acs712Model');
+const PowerReading = require('../model/acsModel');
 
 // POST /api/acs712
 router.post('/', async (req, res) => {
