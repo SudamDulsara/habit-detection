@@ -6,6 +6,7 @@
 #define DHTTYPE  DHT22
 #define PIRPIN   13
 #define ACSPIN   34
+#define LDRPIN   15
 
 const char* WIFI_SSID   = "WiFiName";
 const char* WIFI_PASS   = "WiFiPassword";
@@ -15,6 +16,7 @@ const char* SERVER_PORT = "3000";
 String DHT_URL;
 String PIR_URL;
 String ACS_URL;
+String LDR_URL;
 
 //DHT22 STATE
 DHT dht(DHTPIN, DHTTYPE);
@@ -32,6 +34,9 @@ const int   ACS_SAMPLES  = 1000;
 const float MAINS_VOLTS  = 230.0;   // change to 120.0 if on US mains
 float       acsMidpoint  = 0;
 bool        lastFanOn    = false;
+
+//LDR STATE
+String ldrDeviceName = "ESP32_LDR_1";
 
 //WIFI CONNECTION
 void connectWiFi() {
@@ -69,6 +74,7 @@ void setup() {
   Serial.begin(115200);
   dht.begin();
   pinMode(PIRPIN, INPUT);
+  pinMode(LDRPIN, INPUT);
   analogSetAttenuation(ADC_11db);
 
   // ACS712 calibration - must happen with fan OFF
@@ -91,14 +97,36 @@ void setup() {
   DHT_URL = String("http://") + SERVER_IP + ":" + SERVER_PORT + "/api/dht22";
   PIR_URL = String("http://") + SERVER_IP + ":" + SERVER_PORT + "/api/pir";
   ACS_URL = String("http://") + SERVER_IP + ":" + SERVER_PORT + "/api/acs712";
+  LDR_URL = String("http://") + SERVER_IP + ":" + SERVER_PORT + "/api/ldr32";
 
   Serial.println("All sensors working.");
   Serial.println("   DHT22  → " + DHT_URL);
   Serial.println("   PIR    → " + PIR_URL);
   Serial.println("   ACS712 → " + ACS_URL);
+  Serial.println("   LDR    → " + LDR_URL);
 }
 
 void loop() {
+
+  //LDR - every 5 seconds
+  {
+    static unsigned long lastLDR = 0;
+    if (millis() - lastLDR >= 5000) {
+      lastLDR = millis();
+
+      int lightState = digitalRead(LDRPIN);
+      String status  = (lightState == 1) ? "dark" : "light";
+
+      Serial.println("\n─── LDR ───────────────────────────────");
+      Serial.println("  Light State : " + String(lightState));
+      Serial.println("  Status      : " + status);
+
+      String json = "{\"device\":\"" + ldrDeviceName + "\"," +
+                    "\"value\":"     + String(lightState) + "," +
+                    "\"status\":\""  + status + "\"}";
+      postData(LDR_URL, json);
+    }
+  }
 
   //PIR - every 500ms
   {
